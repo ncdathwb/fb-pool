@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         FB Presence Pool + Follow
-// @version      5.2
+// @version      5.3
 // @updateURL    https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js
 // @downloadURL  https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js
 // @match        https://*.facebook.com/*
@@ -19,7 +19,7 @@
 (async () => {
   if (window.top !== window) return;
 
-  const VERSION = "5.2"; // nhớ tăng cùng lúc với @version ở trên mỗi khi sửa code
+  const VERSION = "5.3"; // nhớ tăng cùng lúc với @version ở trên mỗi khi sửa code
   // Link file trên GitHub (giống @updateURL ở trên) để báo "có bản mới"
   const UPDATE_URL = "https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js";
   const SERVER = "https://unconstructive-pitiably-kiley.ngrok-free.dev";
@@ -169,7 +169,8 @@
     u.setAttribute?.("data-upd", "1");
     u.textContent = `⬆️ Có bản mới v${v} - bấm để cập nhật`;
     u.style.cssText = "cursor:pointer;margin-top:6px;padding:4px 10px;border-radius:6px;border:0;width:100%;background:#f5c518";
-    u.onclick = () => window.open(UPDATE_URL, "_blank"); // Tampermonkey tự mở trang cài đặt
+    // Để Tampermonkey tự mở tab (không bị Chrome chặn popup) → hiện trang Cập nhật
+    u.onclick = () => GM_openInTab(UPDATE_URL + "?t=" + Date.now(), { active: true, insert: true });
     panel.append(u);
     toast(`FB Pool có bản mới v${v}`, true);
   };
@@ -275,7 +276,12 @@
       return poll();
     }
     if (r.ok && r.status === 401) { fatal = true; return setConn(false, "Sai KEY (không khớp server.py)"); }
-    if (r.ok && r.status === 426) { fatal = true; return setConn(false, "Script cũ, hãy cập nhật bản mới", body?.detail || ""); }
+    if (r.ok && r.status === 426) {
+      fatal = true;
+      GM_setValue("upd_check", 0);   // kiểm tra GitHub ngay để hiện nút cập nhật
+      checkUpdate();
+      return setConn(false, "Script cũ, hãy cập nhật bản mới", body?.detail || "");
+    }
     fails++;
     if (!r.ok) {
       const why = {
