@@ -1,10 +1,7 @@
 // FB Pool - code chính.
 // File này KHÔNG cài vào Tampermonkey. Tampermonkey chỉ cài "loader.user.js",
-// loader tự tải file này từ GitHub mỗi lần mở Facebook rồi chạy.
+// loader nạp file này từ GitHub bằng @require.
 // → Muốn sửa gì chỉ cần sửa file này trên GitHub, không cần số phiên bản.
-//
-// Các biến có sẵn do loader truyền vào: GM_xmlhttpRequest, GM_getValue, GM_setValue,
-// GM_deleteValue, GM_openInTab, GM_addValueChangeListener, GM_removeValueChangeListener, BUILD
 
 (async () => {
   if (window.top !== window) return;
@@ -118,7 +115,7 @@
   // =====================================================================
   const { line, panel } = mkPanel();
   const title = line("font-weight:700;margin-bottom:4px");
-  title.textContent = `FB Pool (bản ${BUILD})`;
+  title.textContent = "FB Pool (GitHub)";
   const connLine = line();
   const errLine = line("color:#f99;font-size:11px;word-break:break-all;margin-top:2px");
   const followLine = line("color:#bbb;margin-top:2px");
@@ -164,7 +161,7 @@
     findName(document.documentElement.innerHTML) ||
     [...document.querySelectorAll(`a[href*="${id}"]`)].map((a) => a.innerText.trim()).find((t) => t && t.length < 100) ||
     "?";
-  title.textContent = `FB Pool (bản ${BUILD}) - ${name}`;
+  title.textContent = `FB Pool (GitHub) - ${name}`;
 
   // ===== Gọi server =====
   const req = (method, path, data, timeout = 15000) =>
