@@ -14,7 +14,6 @@
   const FOLLOW_GAP = [3000, 30000];        // chờ ngẫu nhiên 3–30s trước mỗi lần follow (có đếm ngược)
   const MAX_PER_HOUR = 40;                 // tối đa 40 lần follow / giờ
   const JOB_TIMEOUT = 45000;               // tab nền quá 45s chưa xong → bỏ, lần sau thử lại
-  const VERIFY_EVERY = 30 * 60 * 1000;     // 30 phút kiểm tra lại 1 người mình đang follow
 
   const FOLLOW = ["Theo dõi", "Theo dõi lại", "Follow", "Follow back", "Follow Back"];
   const ALREADY = ["Đang theo dõi", "Đã theo dõi", "Following", "Bạn bè", "Friends", "Đã thích", "Liked"];
@@ -253,6 +252,7 @@
   const nameOf = {};             // id → tên (để hiện tên thay vì số id)
   const nm = (uid) => nameOf[uid] || uid;
   let following = new Set();     // người mình đang follow (theo server)
+  let recheck = [];              // [{id, name}] đã follow, cần kiểm tra lại xem có bị huỷ không
   let onlineN = 0;
 
   const report = (target, action) => req("POST", "/report", me({ target, action }));
@@ -274,6 +274,8 @@
       todo = (body.todo || []).map((t) => (typeof t === "string" ? { id: t, name: t } : t));
       todo.forEach((t) => (nameOf[t.id] = t.name));
       following = new Set(body.following || []);
+      recheck = body.recheck || [];
+      recheck.forEach((t) => (nameOf[t.id] = t.name));
       (body.news || []).forEach((n) => toast("🔔 " + n));
       setConn(true, "Đã kết nối server");
       renderFollow();
@@ -375,7 +377,6 @@
   };
 
   // ===== Vòng tự follow: chờ 3–30s (đếm ngược) → follow 1 người → lặp lại =====
-  let lastVerify = Date.now();
   let nextAt = 0, gapTotal = 0;   // thời điểm follow người tiếp theo + tổng thời gian chờ
   let next = null;                // người sẽ follow tiếp theo
   const skipped = new Set();      // không follow được lần này → bỏ qua, không hiện lỗi
@@ -402,16 +403,24 @@
       if (!cand.length) {
         nextAt = 0;
         next = null;
-        if (following.size && Date.now() - lastVerify > VERIFY_EVERY) {
-          // Rảnh thì kiểm tra lại 1 người mình đang follow (phát hiện bỏ follow ngoài ý muốn)
-          lastVerify = Date.now();
-          const list = [...following];
-          const t = list[Math.floor(Math.random() * list.length)];
-          const result = await runJob(t, "verify");
+        // Rảnh thì kiểm tra ngầm 1 người đã follow: nếu nút lại là "Theo dõi"/"Theo dõi lại" → follow lại
+        const rc = recheck.find((t) => !skipped.has(t.id));
+        if (rc) {
+          recheck = recheck.filter((t) => t.id !== rc.id);
+          view = { kind: "msg", text: `🔍 Kiểm tra lại ${rc.name}...` };
+          renderFollow();
+          const result = await runJob(rc.id, "verify");
           if (result === "unfollow") {
-            following.delete(t);
-            await report(t, "unfollow");
+            following.delete(rc.id);
+            await report(rc.id, "unfollow");               // server đưa vào hàng chờ → mở trang bấm lại
+            todo.push({ id: rc.id, name: rc.name });
+          } else if (result === "following") {
+            await report(rc.id, "following");              // vẫn đang follow → 15 phút sau xem lại
+          } else {
+            skipped.add(rc.id);
           }
+          await sleep(3000);
+          continue;
         }
         view = { kind: "msg", text: "✔ Đã follow hết, chờ người mới vào" };
         renderFollow();
