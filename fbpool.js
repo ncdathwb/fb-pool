@@ -11,7 +11,7 @@
 
   // ===== NHỊP FOLLOW =====
   // Follow quá dồn dập Facebook sẽ tạm khoá tính năng follow của tài khoản.
-  const FOLLOW_GAP = [3000, 30000];        // chờ ngẫu nhiên 3–30s trước mỗi lần follow (có đếm ngược)
+  const FOLLOW_GAP = [1000, 3000];        // chờ ngẫu nhiên 3–30s trước mỗi lần follow (có đếm ngược)
   const MAX_PER_HOUR = 40;                 // tối đa 40 lần follow / giờ
   const JOB_TIMEOUT = 45000;               // tab nền quá 45s chưa xong → bỏ, lần sau thử lại
 
@@ -53,26 +53,72 @@
   };
 
   // ===== Đọc trạng thái nút Theo dõi trên trang cá nhân =====
-  const visible = (el) => el.offsetParent !== null || el.getClientRects().length > 0;
-  const findBtn = (labels) =>
-    [...document.querySelectorAll('[role="button"],[aria-label]')].find((el) => {
-      const t = (el.innerText || "").trim();
-      const a = (el.getAttribute("aria-label") || "").trim();
-      return (labels.includes(t) || labels.includes(a)) && visible(el);
-    });
-  const followState = () => (findBtn(ALREADY) ? "following" : findBtn(FOLLOW) ? "not" : null);
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
+  };
+  const labelOf = (el) => [(el.innerText || "").trim(), (el.getAttribute("aria-label") || "").trim()];
+  // Tìm NÚT THẬT (role=button) có chữ khớp; ưu tiên nút nằm cao nhất trang (phần đầu trang cá nhân),
+  // bỏ qua nút trong hộp thoại trừ khi đang tìm trong hộp thoại
+  const findBtn = (labels, scope = document) => {
+    const seen = new Set();
+    const list = [];
+    for (const el of scope.querySelectorAll('[role="button"],[aria-label],span,div')) {
+      if (el.children.length > 3) continue;
+      const [t, a] = labelOf(el);
+      if (!labels.includes(t) && !labels.includes(a)) continue;
+      const btn = el.closest('[role="button"],button');
+      if (!btn || seen.has(btn) || !visible(btn)) continue;
+      if (scope === document && btn.closest('[role="dialog"]')) continue;
+      seen.add(btn);
+      list.push(btn);
+    }
+    list.sort((x, y) => x.getBoundingClientRect().top - y.getBoundingClientRect().top);
+    return list[0] || null;
+  };
+  const followState = () => {
+    const a = findBtn(ALREADY), f = findBtn(FOLLOW);
+    if (!a && !f) return null;
+    if (!a) return "not";
+    if (!f) return "following";
+    return a.getBoundingClientRect().top <= f.getBoundingClientRect().top ? "following" : "not";
+  };
+
+  // Bấm giống người thật: di chuột tới, nhấn xuống, nhả ra, click
+  const humanClick = (el) => {
+    el.scrollIntoView({ block: "center" });
+    const r = el.getBoundingClientRect();
+    const o = { bubbles: true, cancelable: true, view: window, button: 0, buttons: 1,
+                clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 };
+    const P = window.PointerEvent || MouseEvent;
+    el.dispatchEvent(new P("pointerover", { ...o, pointerType: "mouse" }));
+    el.dispatchEvent(new MouseEvent("mouseover", o));
+    el.dispatchEvent(new P("pointerdown", { ...o, pointerType: "mouse" }));
+    el.dispatchEvent(new MouseEvent("mousedown", o));
+    el.focus?.();
+    el.dispatchEvent(new P("pointerup", { ...o, pointerType: "mouse", buttons: 0 }));
+    el.dispatchEvent(new MouseEvent("mouseup", { ...o, buttons: 0 }));
+    el.click();
+  };
+  const CONFIRM = ["Theo dõi", "Theo dõi lại", "Follow", "Follow back", "Xác nhận", "Confirm", "Tiếp tục", "Continue", "OK"];
+  const describe = (el) => {
+    if (!el) return "";
+    const [t, a] = labelOf(el);
+    return `<${el.tagName.toLowerCase()} role=${el.getAttribute("role") || "-"} text="${t.slice(0, 30)}" aria="${a.slice(0, 30)}">`;
+  };
 
   // Chờ tới khi điều kiện đúng (theo dõi thay đổi trên trang, không ngủ cứng)
   const waitFor = (fn, ms) =>
     new Promise((resolve) => {
       const v = fn();
       if (v) return resolve(v);
-      const obs = new MutationObserver(() => {
-        const v = fn();
-        if (v) { obs.disconnect(); clearTimeout(t); resolve(v); }
-      });
+      let done = false;
+      const end = (v) => { if (done) return; done = true; obs.disconnect(); clearInterval(iv); clearTimeout(t); resolve(v); };
+      const check = () => { if (done) return; const v = fn(); if (v) end(v); };
+      const obs = new MutationObserver(check);
       obs.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
-      const t = setTimeout(() => { obs.disconnect(); resolve(null); }, ms);
+      const iv = setInterval(check, 300);
+      const t = setTimeout(() => end(null), ms);
     });
 
   // =====================================================================
@@ -114,9 +160,24 @@
       b.style.outlineOffset = "3px";
       say("👉 FB Pool đang bấm Theo dõi...");
       await sleep(1200);                        // cho người xem thấy nút sắp được bấm
-      b.click();
-      const ok = await waitFor(() => followState() === "following", 8000);
+      humanClick(b);
+      // Thành công khi: hiện "Đang theo dõi", hoặc nút Theo dõi biến mất. Nếu bật hộp xác nhận → bấm xác nhận
+      let confirmed = false;
+      const ok = await waitFor(() => {
+        if (followState() === "following") return true;
+        const dlg = [...document.querySelectorAll('[role="dialog"]')].find(visible);
+        if (dlg && !confirmed) {
+          const c = findBtn(CONFIRM, dlg);
+          if (c) { confirmed = true; humanClick(c); }
+        }
+        return !b.isConnected && !dlg ? true : null;
+      }, 8000);
       result = ok ? "follow" : "click_failed";
+      if (!ok) {
+        const others = [...document.querySelectorAll('[role="button"]')].filter(visible)
+          .map((e) => labelOf(e)[0] || labelOf(e)[1]).filter(Boolean).slice(0, 8).join(" | ");
+        GM_setValue("job_detail", `bấm ${describe(b)} → sau 8s nút: ${describe(findBtn(FOLLOW))} · các nút: ${others}`.slice(0, 400));
+      }
       const nb = findBtn(ALREADY);
       if (nb) nb.style.outline = "3px solid #31a24c";
       say(ok ? "✅ Đã follow!" : "Không bấm được, bỏ qua", ok ? "#8fd19e" : "#f3727f");
@@ -126,7 +187,8 @@
     }
     log("worker:", job.target, result);
     await sleep(job.mode === "verify" ? 0 : 2000); // giữ 2 giây cho người xem thấy kết quả rồi mới đóng tab
-    GM_setValue("jobresult", { target: job.target, mode: job.mode, result, ts: Date.now() });
+    GM_setValue("jobresult", { target: job.target, mode: job.mode, result, ts: Date.now(),
+                               detail: result === "click_failed" ? GM_getValue("job_detail", "") : "" });
     return;
   }
 
@@ -255,7 +317,7 @@
   let recheck = [];              // [{id, name}] đã follow, cần kiểm tra lại xem có bị huỷ không
   let onlineN = 0;
 
-  const report = (target, action) => req("POST", "/report", me({ target, action }));
+  const report = (target, action, detail = "") => req("POST", "/report", me({ target, action, detail }));
 
   // ===== Điểm danh "chờ dài" =====
   let seen = -1;
@@ -343,6 +405,7 @@
   const paused = () => false;
 
   // ===== Mở tab nền để follow / kiểm tra 1 người =====
+  let lastDetail = "";
   const runJob = (target, mode) =>
     new Promise((resolve) => {
       GM_setValue("jobresult", null);
@@ -357,7 +420,7 @@
         resolve(result);
       };
       listener = GM_addValueChangeListener("jobresult", (_k, _o, v) => {
-        if (v && v.target === target && v.mode === mode) finish(v.result);
+        if (v && v.target === target && v.mode === mode) { lastDetail = v.detail || ""; finish(v.result); }
       });
       const timer = setTimeout(() => finish("timeout"), JOB_TIMEOUT);
       // Follow: mở trang người đó ra TRƯỚC MẮT để thấy luôn; kiểm tra lại thì chạy ngầm
@@ -379,7 +442,10 @@
   // ===== Vòng tự follow: chờ 3–30s (đếm ngược) → follow 1 người → lặp lại =====
   let nextAt = 0, gapTotal = 0;   // thời điểm follow người tiếp theo + tổng thời gian chờ
   let next = null;                // người sẽ follow tiếp theo
-  const skipped = new Set();      // không follow được lần này → bỏ qua, không hiện lỗi
+  const RETRY_MS = 5 * 60 * 1000;
+  const failedAt = new Map();     // follow lỗi → chờ 5 phút rồi tự thử lại
+  const skipped = { has: (id) => failedAt.has(id) && Date.now() - failedAt.get(id) < RETRY_MS, add: (id) => failedAt.set(id, Date.now()) };
+  const failedNow = () => [...failedAt.keys()].filter((id) => skipped.has(id)).length;
   const loop = async () => {
     while (!fatal) {
       if (!isLeader() || connOk !== true) {
@@ -400,6 +466,7 @@
       }
 
       const cand = todo.filter((t) => t.id !== id && !skipped.has(t.id));
+      // người lỗi đã hết 5 phút chờ mà server chưa trả lại trong todo → giữ trong todo cục bộ
       if (!cand.length) {
         nextAt = 0;
         next = null;
@@ -422,7 +489,10 @@
           await sleep(3000);
           continue;
         }
-        view = { kind: "msg", text: "✔ Đã follow hết, chờ người mới vào" };
+        const nf = failedNow();
+        view = { kind: "msg", text: nf
+          ? `⚠ Chưa follow được ${nf} người, tự thử lại sau 5 phút`
+          : "✔ Đã follow hết, chờ người mới vào" };
         renderFollow();
         await sleep(1000);
         continue;
@@ -445,9 +515,11 @@
       view = { kind: "busy", who: target.name };
       renderFollow();
       const result = await runJob(target.id, "follow");
-      if (result !== "timeout") await report(target.id, result);
-      todo = todo.filter((t) => t.id !== target.id);
-      if (result === "follow" || result === "already") following.add(target.id);
+      if (result !== "timeout") await report(target.id, result, lastDetail);
+      if (result === "follow" || result === "already") {
+        following.add(target.id);
+        todo = todo.filter((t) => t.id !== target.id);
+      }
       if (result === "follow") {
         GM_setValue("fl_times", [...times, Date.now()]);
         recent.unshift({ t: hhmm(), who: target.name });
