@@ -16,7 +16,7 @@
   const JOB_TIMEOUT = 45000;               // tab nền quá 45s chưa xong → bỏ, lần sau thử lại
   const VERIFY_EVERY = 30 * 60 * 1000;     // 30 phút kiểm tra lại 1 người mình đang follow
 
-  const FOLLOW = ["Theo dõi", "Follow"];
+  const FOLLOW = ["Theo dõi", "Theo dõi lại", "Follow", "Follow back", "Follow Back"];
   const ALREADY = ["Đang theo dõi", "Đã theo dõi", "Following", "Bạn bè", "Friends", "Đã thích", "Liked"];
   const JOB_HASH = "#fbpool-job";
 
