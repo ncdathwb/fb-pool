@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         FB Presence Pool + Follow
-// @version      5.1
-// @updateURL    https://raw.githubusercontent.com/TEN_GITHUB/fb-pool/main/followFB.user.js
-// @downloadURL  https://raw.githubusercontent.com/TEN_GITHUB/fb-pool/main/followFB.user.js
+// @version      5.2
+// @updateURL    https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js
+// @downloadURL  https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js
 // @match        https://*.facebook.com/*
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
@@ -19,7 +19,7 @@
 (async () => {
   if (window.top !== window) return;
 
-  const VERSION = "5.1"; // nhớ tăng cùng lúc với @version ở trên mỗi khi sửa code
+  const VERSION = "5.2"; // nhớ tăng cùng lúc với @version ở trên mỗi khi sửa code
   // Link file trên GitHub (giống @updateURL ở trên) để báo "có bản mới"
   const UPDATE_URL = "https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js";
   const SERVER = "https://unconstructive-pitiably-kiley.ngrok-free.dev";
@@ -27,7 +27,7 @@
 
   // ===== NHỊP FOLLOW =====
   // Follow quá dồn dập Facebook sẽ tạm khoá tính năng follow của tài khoản.
-  const FOLLOW_GAP = [2000, 15000];        // nghỉ ngẫu nhiên 2–15s sau mỗi lần follow
+  const FOLLOW_GAP = [3000, 30000];        // chờ ngẫu nhiên 3–30s trước mỗi lần follow (có đếm ngược)
   const MAX_PER_HOUR = 40;                 // tối đa 40 lần follow / giờ
   const JOB_TIMEOUT = 45000;               // tab nền quá 45s chưa xong → bỏ, lần sau thử lại
   const VERIFY_EVERY = 30 * 60 * 1000;     // 30 phút kiểm tra lại 1 người mình đang follow
@@ -244,7 +244,9 @@
   const me = (extra) => ({ id, name, v: VERSION, tab: TAB, ...extra });
 
   // ===== Dữ liệu từ server =====
-  let todo = [];                 // người online mình chưa follow
+  let todo = [];                 // [{id, name}] người online mình chưa follow
+  const nameOf = {};             // id → tên (để hiện tên thay vì số id)
+  const nm = (uid) => nameOf[uid] || uid;
   let following = new Set();     // người mình đang follow (theo server)
   let onlineN = 0;
 
@@ -264,7 +266,8 @@
       fails = 0;
       seen = body.seen;
       onlineN = body.online;
-      todo = body.todo || [];
+      todo = (body.todo || []).map((t) => (typeof t === "string" ? { id: t, name: t } : t));
+      todo.forEach((t) => (nameOf[t.id] = t.name));
       following = new Set(body.following || []);
       (body.news || []).forEach((n) => toast("🔔 " + n));
       setConn(true, `Đã kết nối - online: ${onlineN} người`);
@@ -305,15 +308,21 @@
     return false;
   };
 
-  // ===== Bật / tắt tự follow =====
+  // ===== Bảng trạng thái tự follow =====
   const paused = () => GM_getValue("paused", false);
-  let status = "";
+  let status = "";      // dòng 1: đang làm gì / đếm ngược
+  let lastDone = "";    // dòng 2: kết quả lần follow gần nhất
+  const fmt = (ms) => {
+    const s = Math.ceil(ms / 1000);
+    return s >= 60 ? `${Math.floor(s / 60)}p${String(s % 60).padStart(2, "0")}s` : `${s}s`;
+  };
   const renderFollow = () => {
-    const done = GM_getValue("fl_times", []).filter((t) => Date.now() - t < 3600000).length;
-    followLine.textContent = paused()
-      ? "Tự follow: ĐANG TẮT"
-      : `Tự follow: còn ${todo.length} người chờ · ${done}/${MAX_PER_HOUR} trong giờ` + (status ? `\n${status}` : "");
+    const lines = paused()
+      ? ["⏸ Tự follow: ĐANG TẮT"]
+      : [status, lastDone && `Vừa xong: ${lastDone}`];
+    lines.push(`Đã follow: ${following.size} người · còn ${todo.length} người chờ`);
     followLine.style.whiteSpace = "pre-line";
+    followLine.textContent = lines.filter(Boolean).join("\n");
     btn.textContent = paused() ? "Bật tự follow" : "Tắt tự follow";
   };
   btn.onclick = () => {
@@ -354,51 +363,78 @@
     following: "vẫn đang follow",
   };
 
-  // ===== Vòng tự follow =====
+  // ===== Vòng tự follow: chờ 3–30s (đếm ngược) → follow 1 người → lặp lại =====
   let lastVerify = Date.now();
+  let nextAt = 0;        // thời điểm follow người tiếp theo
+  let next = null;       // người sẽ follow tiếp theo
   const loop = async () => {
     while (!fatal) {
-      renderFollow();
-      if (paused() || !isLeader() || connOk !== true) { await sleep(2000); continue; }
-
-      const times = GM_getValue("fl_times", []).filter((t) => Date.now() - t < 3600000);
-      const target = todo.find((t) => t !== id);
-
-      if (target && times.length < MAX_PER_HOUR) {
-        status = `Đang follow ${target}...`;
+      if (paused() || !isLeader() || connOk !== true) {
+        status = paused() ? "" : connOk !== true ? "Chờ kết nối server..." : "Tab Facebook khác đang chạy tự follow";
+        nextAt = 0;
         renderFollow();
-        const result = await runJob(target, "follow");
-        todo = todo.filter((t) => t !== target);
-        if (result !== "timeout") await report(target, result);
-        if (result === "follow" || result === "already") following.add(target);
-        if (result === "follow") GM_setValue("fl_times", [...times, Date.now()]);
-        status = `${target}: ${LABEL[result] || result}`;
-        log(status);
-        renderFollow();
-        await sleep(rand(...FOLLOW_GAP));
+        await sleep(1000);
         continue;
       }
 
-      if (target) {
-        status = "Đã đủ giới hạn trong giờ, tạm chờ";
-      } else if (following.size && Date.now() - lastVerify > VERIFY_EVERY) {
-        // Rảnh thì kiểm tra lại 1 người mình đang follow (phát hiện bỏ follow ngoài ý muốn)
-        lastVerify = Date.now();
-        const list = [...following];
-        const t = list[Math.floor(Math.random() * list.length)];
-        status = `Kiểm tra lại ${t}...`;
+      // Giới hạn mỗi giờ (để Facebook không khoá nút Theo dõi)
+      const times = GM_getValue("fl_times", []).filter((t) => Date.now() - t < 3600000);
+      if (times.length >= MAX_PER_HOUR) {
+        status = `😴 Đã follow ${MAX_PER_HOUR} người trong 1 giờ, nghỉ thêm ${fmt(3600000 - (Date.now() - times[0]))}`;
         renderFollow();
-        const result = await runJob(t, "verify");
-        if (result === "unfollow") {
-          following.delete(t);
-          await report(t, "unfollow");
-        }
-        status = `${t}: ${LABEL[result] || result}`;
-      } else {
-        status = todo.length ? status : "Đã follow hết người đang online";
+        await sleep(1000);
+        continue;
       }
+
+      const cand = todo.filter((t) => t.id !== id);
+      if (!cand.length) {
+        nextAt = 0;
+        next = null;
+        if (following.size && Date.now() - lastVerify > VERIFY_EVERY) {
+          // Rảnh thì kiểm tra lại 1 người mình đang follow (phát hiện bỏ follow ngoài ý muốn)
+          lastVerify = Date.now();
+          const list = [...following];
+          const t = list[Math.floor(Math.random() * list.length)];
+          status = `🔍 Kiểm tra lại ${nm(t)}...`;
+          renderFollow();
+          const result = await runJob(t, "verify");
+          if (result === "unfollow") {
+            following.delete(t);
+            await report(t, "unfollow");
+            lastDone = `${nm(t)}: ${LABEL.unfollow}`;
+          }
+        }
+        status = "✔ Đã follow hết người đang online, chờ người mới vào...";
+        renderFollow();
+        await sleep(1000);
+        continue;
+      }
+
+      // Chọn người tiếp theo; người đó rời pool thì chọn người khác
+      if (!next || !cand.some((t) => t.id === next.id)) next = cand[0];
+      if (!nextAt) nextAt = Date.now() + rand(...FOLLOW_GAP);
+
+      const left = nextAt - Date.now();
+      if (left > 0) {
+        status = `⏳ ${fmt(left)} nữa follow → ${next.name}`;
+        renderFollow();
+        await sleep(Math.min(1000, left));
+        continue;
+      }
+
+      // Hết đếm ngược → follow
+      const target = next;
+      status = `👉 Đang follow ${target.name}...`;
       renderFollow();
-      await sleep(2000);
+      const result = await runJob(target.id, "follow");
+      todo = todo.filter((t) => t.id !== target.id);
+      if (result !== "timeout") await report(target.id, result);
+      if (result === "follow" || result === "already") following.add(target.id);
+      if (result === "follow") GM_setValue("fl_times", [...times, Date.now()]);
+      lastDone = `${target.name}: ${LABEL[result] || result}`;
+      log(lastDone);
+      next = null;
+      nextAt = Date.now() + rand(...FOLLOW_GAP); // bắt đầu đếm ngược cho người sau
     }
   };
   loop();
@@ -412,10 +448,10 @@
     if (following.has(t) && s === "not") {
       following.delete(t);
       report(t, "unfollow");
-      toast(`Đã báo server: bạn bỏ follow ${t}`, false);
-    } else if (!following.has(t) && s === "following" && todo.includes(t)) {
+      toast(`Đã báo server: bạn bỏ follow ${nm(t)}`, false);
+    } else if (!following.has(t) && s === "following" && todo.some((x) => x.id === t)) {
       following.add(t);
-      todo = todo.filter((x) => x !== t);
+      todo = todo.filter((x) => x.id !== t);
       report(t, "follow"); // người dùng tự bấm follow bằng tay
     }
   }, 3000);
