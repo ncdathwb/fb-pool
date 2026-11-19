@@ -17,7 +17,7 @@
   const VERIFY_EVERY = 30 * 60 * 1000;     // 30 phút kiểm tra lại 1 người mình đang follow
 
   const FOLLOW = ["Theo dõi", "Follow"];
-  const ALREADY = ["Đang theo dõi", "Following", "Bạn bè", "Friends"];
+  const ALREADY = ["Đang theo dõi", "Đã theo dõi", "Following", "Bạn bè", "Friends", "Đã thích", "Liked"];
   const JOB_HASH = "#fbpool-job";
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -88,9 +88,16 @@
   if (isWorker) {
     if (!freshJob) return; // tab job cũ còn sót lại → không làm gì
     GM_setValue("job", { ...job, claimed: true });
-    const { line } = mkPanel();
-    line("font-weight:700").textContent = "FB Pool - tab tự động";
-    line().textContent = `${job.mode === "verify" ? "Kiểm tra" : "Follow"} ${job.target}...`;
+
+    // Khung thông báo to giữa trên màn hình để người xem thấy đang làm gì
+    const box = document.createElement("div");
+    box.style.cssText =
+      "position:fixed;top:70px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#18191a;color:#fff;" +
+      "border:1px solid #3a3b3c;border-radius:14px;padding:12px 22px;font:600 15px system-ui,sans-serif;" +
+      "box-shadow:0 8px 30px rgba(0,0,0,.5);text-align:center;min-width:240px";
+    const say = (t, color = "#fff") => { box.textContent = t; box.style.color = color; };
+    root.appendChild(box);
+    say(job.mode === "verify" ? "🔍 FB Pool đang kiểm tra..." : "⏳ FB Pool đang tìm nút Theo dõi...");
 
     const s = await waitFor(followState, 20000);
     let result;
@@ -98,14 +105,28 @@
       result = s === "following" ? "following" : s === "not" ? "unfollow" : "no_button";
     } else if (s === "following") {
       result = "already";
+      const b = findBtn(ALREADY);
+      if (b) b.style.outline = "3px solid #31a24c";
+      say("✔ Đã follow trang này từ trước", "#8fd19e");
     } else if (s === "not") {
-      findBtn(FOLLOW).click();
+      const b = findBtn(FOLLOW);
+      b.scrollIntoView({ block: "center" });
+      b.style.outline = "3px solid #2d88ff";
+      b.style.outlineOffset = "3px";
+      say("👉 FB Pool đang bấm Theo dõi...");
+      await sleep(1200);                        // cho người xem thấy nút sắp được bấm
+      b.click();
       const ok = await waitFor(() => followState() === "following", 8000);
       result = ok ? "follow" : "click_failed";
+      const nb = findBtn(ALREADY);
+      if (nb) nb.style.outline = "3px solid #31a24c";
+      say(ok ? "✅ Đã follow!" : "Không bấm được, bỏ qua", ok ? "#8fd19e" : "#f3727f");
     } else {
       result = "no_button";
+      say("Không thấy nút Theo dõi, bỏ qua", "#b0b3b8");
     }
     log("worker:", job.target, result);
+    await sleep(job.mode === "verify" ? 0 : 2000); // giữ 2 giây cho người xem thấy kết quả rồi mới đóng tab
     GM_setValue("jobresult", { target: job.target, mode: job.mode, result, ts: Date.now() });
     return;
   }
@@ -113,19 +134,57 @@
   // =====================================================================
   // TAB CHÍNH
   // =====================================================================
-  const { line, panel } = mkPanel();
-  const title = line("font-weight:700;margin-bottom:4px");
-  title.textContent = "FB Pool (GitHub)";
-  const connLine = line();
-  const errLine = line("color:#f99;font-size:11px;word-break:break-all;margin-top:2px");
-  const followLine = line("color:#bbb;margin-top:2px");
-  const btn = document.createElement("button");
-  btn.style.cssText = "cursor:pointer;margin-top:8px;padding:4px 10px;border-radius:6px;border:0;width:100%";
-  panel.append(btn);
+  // ---- Bảng điều khiển gọn, dễ nhìn ----
+  const css = document.createElement("style");
+  css.textContent = `
+    #fbp{position:fixed;left:14px;bottom:14px;z-index:2147483647;width:270px;background:#18191a;color:#e4e6eb;
+      border:1px solid #3a3b3c;border-radius:14px;font:13px/1.45 system-ui,sans-serif;box-shadow:0 6px 24px rgba(0,0,0,.45);overflow:hidden}
+    #fbp .hd{display:flex;align-items:center;gap:8px;padding:10px 12px;background:#242526;border-bottom:1px solid #3a3b3c}
+    #fbp .dot{width:9px;height:9px;border-radius:50%;background:#f0b400;flex:none}
+    #fbp .ttl{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #fbp .sub{font-size:11px;color:#b0b3b8}
+    #fbp .main{padding:14px 12px 10px;text-align:center}
+    #fbp .big{font-size:40px;font-weight:800;line-height:1;color:#fff;font-variant-numeric:tabular-nums}
+    #fbp .big small{font-size:16px;font-weight:600;color:#b0b3b8;margin-left:2px}
+    #fbp .lbl{margin-top:6px;color:#b0b3b8;font-size:12px}
+    #fbp .who{margin-top:2px;font-weight:700;color:#4599ff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #fbp .msg{font-size:14px;font-weight:600;color:#e4e6eb;padding:6px 0}
+    #fbp .bar{height:5px;background:#3a3b3c;border-radius:3px;margin-top:10px;overflow:hidden}
+    #fbp .bar i{display:block;height:100%;width:0;background:#2d88ff;transition:width .9s linear}
+    #fbp .st{display:flex;border-top:1px solid #3a3b3c}
+    #fbp .st div{flex:1;text-align:center;padding:8px 0}
+    #fbp .st div+div{border-left:1px solid #3a3b3c}
+    #fbp .st b{display:block;font-size:17px;color:#fff}
+    #fbp .st span{font-size:11px;color:#b0b3b8}
+    #fbp .log{border-top:1px solid #3a3b3c;padding:8px 12px;font-size:12px;color:#b0b3b8;max-height:66px;overflow:hidden}
+    #fbp .log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    #fbp .log:empty{display:none}
+    #fbp .err{padding:0 12px 10px;color:#f3727f;font-size:11px;word-break:break-all}
+    #fbp .err:empty{display:none}`;
+  (document.head || root).appendChild(css);
+
+  const panel = document.createElement("div");
+  panel.id = "fbp";
+  panel.innerHTML = `
+    <div class="hd"><span class="dot"></span><div style="min-width:0">
+      <div class="ttl">FB Pool</div><div class="sub">Đang kết nối...</div></div></div>
+    <div class="main"></div>
+    <div class="err"></div>
+    <div class="st">
+      <div><b data-k="online">–</b><span>Online</span></div>
+      <div><b data-k="done">–</b><span>Đã follow</span></div>
+      <div><b data-k="wait">–</b><span>Đang chờ</span></div>
+    </div>
+    <div class="log"></div>`;
+  root.appendChild(panel);
+  const $ = (q) => panel.querySelector(q);
+  const title = $(".ttl"), connLine = $(".sub"), dot = $(".dot"), mainBox = $(".main"), errLine = $(".err"), logBox = $(".log");
+  const stat = (k, v) => ($(`[data-k="${k}"]`).textContent = v);
 
   let connOk = null;
   const setConn = (ok, text, detail = "") => {
-    connLine.textContent = (ok ? "🟢 " : "🔴 ") + text;
+    connLine.textContent = text;
+    dot.style.background = ok ? "#31a24c" : "#f3425f";
     errLine.textContent = ok ? "" : detail;
     if (!ok) log(text, detail);
     if (connOk !== ok) {
@@ -133,13 +192,12 @@
       connOk = ok;
     }
   };
-  connLine.textContent = "⏳ Đang kết nối...";
 
   const ck = (n) => document.cookie.match(new RegExp(`(?:^|;\\s*)${n}=(\\d+)`))?.[1];
   const id = ck("i_user") || ck("c_user");
   if (!id) {
-    connLine.textContent = "🔴 Không đọc được ID Facebook (cookie c_user)";
-    btn.style.display = "none";
+    connLine.textContent = "Không đọc được ID Facebook (chưa đăng nhập?)";
+    dot.style.background = "#f3425f";
     return;
   }
 
@@ -161,7 +219,7 @@
     findName(document.documentElement.innerHTML) ||
     [...document.querySelectorAll(`a[href*="${id}"]`)].map((a) => a.innerText.trim()).find((t) => t && t.length < 100) ||
     "?";
-  title.textContent = `FB Pool (GitHub) - ${name}`;
+  title.textContent = name;
 
   // ===== Gọi server =====
   const req = (method, path, data, timeout = 15000) =>
@@ -217,7 +275,7 @@
       todo.forEach((t) => (nameOf[t.id] = t.name));
       following = new Set(body.following || []);
       (body.news || []).forEach((n) => toast("🔔 " + n));
-      setConn(true, `Đã kết nối - online: ${onlineN} người`);
+      setConn(true, "Đã kết nối server");
       renderFollow();
       return poll();
     }
@@ -255,27 +313,32 @@
     return false;
   };
 
-  // ===== Bảng trạng thái tự follow =====
-  const paused = () => GM_getValue("paused", false);
-  let status = "";      // dòng 1: đang làm gì / đếm ngược
-  let lastDone = "";    // dòng 2: kết quả lần follow gần nhất
-  const fmt = (ms) => {
-    const s = Math.ceil(ms / 1000);
-    return s >= 60 ? `${Math.floor(s / 60)}p${String(s % 60).padStart(2, "0")}s` : `${s}s`;
-  };
+  // ===== Hiển thị trạng thái =====
+  // view: { kind: "count" | "busy" | "msg", left, total, who, text }
+  let view = { kind: "msg", text: "Đang kết nối..." };
+  const recent = [];   // các lần follow thành công gần nhất
+  const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const hhmm = () => new Date().toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
   const renderFollow = () => {
-    const lines = paused()
-      ? ["⏸ Tự follow: ĐANG TẮT"]
-      : [status, lastDone && `Vừa xong: ${lastDone}`];
-    lines.push(`Đã follow: ${following.size} người · còn ${todo.length} người chờ`);
-    followLine.style.whiteSpace = "pre-line";
-    followLine.textContent = lines.filter(Boolean).join("\n");
-    btn.textContent = paused() ? "Bật tự follow" : "Tắt tự follow";
+    if (view.kind === "count") {
+      const sec = Math.max(0, Math.ceil(view.left / 1000));
+      const pct = view.total ? Math.min(100, 100 - (view.left / view.total) * 100) : 0;
+      mainBox.innerHTML =
+        `<div class="big">${sec}<small>giây</small></div>` +
+        `<div class="lbl">nữa sẽ follow</div><div class="who">${esc(view.who)}</div>` +
+        `<div class="bar"><i style="width:${pct}%"></i></div>`;
+    } else if (view.kind === "busy") {
+      mainBox.innerHTML = `<div class="msg">👉 Đang follow</div><div class="who">${esc(view.who)}</div>` +
+        `<div class="bar"><i style="width:100%;background:#31a24c"></i></div>`;
+    } else {
+      mainBox.innerHTML = `<div class="msg">${esc(view.text)}</div>`;
+    }
+    stat("online", onlineN || "–");
+    stat("done", following.size);
+    stat("wait", todo.length);
+    logBox.innerHTML = recent.map((r) => `<div>✅ ${r.t} · ${esc(r.who)}</div>`).join("");
   };
-  btn.onclick = () => {
-    GM_setValue("paused", !paused());
-    renderFollow();
-  };
+  const paused = () => false;
 
   // ===== Mở tab nền để follow / kiểm tra 1 người =====
   const runJob = (target, mode) =>
@@ -295,8 +358,9 @@
         if (v && v.target === target && v.mode === mode) finish(v.result);
       });
       const timer = setTimeout(() => finish("timeout"), JOB_TIMEOUT);
+      // Follow: mở trang người đó ra TRƯỚC MẮT để thấy luôn; kiểm tra lại thì chạy ngầm
       handle = GM_openInTab(`https://www.facebook.com/profile.php?id=${target}${JOB_HASH}`, {
-        active: false, insert: true, setParent: true,
+        active: mode === "follow", insert: true, setParent: true,
       });
     });
 
@@ -312,12 +376,13 @@
 
   // ===== Vòng tự follow: chờ 3–30s (đếm ngược) → follow 1 người → lặp lại =====
   let lastVerify = Date.now();
-  let nextAt = 0;        // thời điểm follow người tiếp theo
-  let next = null;       // người sẽ follow tiếp theo
+  let nextAt = 0, gapTotal = 0;   // thời điểm follow người tiếp theo + tổng thời gian chờ
+  let next = null;                // người sẽ follow tiếp theo
+  const skipped = new Set();      // không follow được lần này → bỏ qua, không hiện lỗi
   const loop = async () => {
     while (!fatal) {
-      if (paused() || !isLeader() || connOk !== true) {
-        status = paused() ? "" : connOk !== true ? "Chờ kết nối server..." : "Tab Facebook khác đang chạy tự follow";
+      if (!isLeader() || connOk !== true) {
+        view = { kind: "msg", text: connOk !== true ? "⏳ Đang chờ kết nối server..." : "Tab Facebook khác đang chạy" };
         nextAt = 0;
         renderFollow();
         await sleep(1000);
@@ -327,13 +392,13 @@
       // Giới hạn mỗi giờ (để Facebook không khoá nút Theo dõi)
       const times = GM_getValue("fl_times", []).filter((t) => Date.now() - t < 3600000);
       if (times.length >= MAX_PER_HOUR) {
-        status = `😴 Đã follow ${MAX_PER_HOUR} người trong 1 giờ, nghỉ thêm ${fmt(3600000 - (Date.now() - times[0]))}`;
+        view = { kind: "msg", text: `😴 Nghỉ ${fmt(3600000 - (Date.now() - times[0]))} (đủ ${MAX_PER_HOUR} follow/giờ)` };
         renderFollow();
         await sleep(1000);
         continue;
       }
 
-      const cand = todo.filter((t) => t.id !== id);
+      const cand = todo.filter((t) => t.id !== id && !skipped.has(t.id));
       if (!cand.length) {
         nextAt = 0;
         next = null;
@@ -342,16 +407,13 @@
           lastVerify = Date.now();
           const list = [...following];
           const t = list[Math.floor(Math.random() * list.length)];
-          status = `🔍 Kiểm tra lại ${nm(t)}...`;
-          renderFollow();
           const result = await runJob(t, "verify");
           if (result === "unfollow") {
             following.delete(t);
             await report(t, "unfollow");
-            lastDone = `${nm(t)}: ${LABEL.unfollow}`;
           }
         }
-        status = "✔ Đã follow hết người đang online, chờ người mới vào...";
+        view = { kind: "msg", text: "✔ Đã follow hết, chờ người mới vào" };
         renderFollow();
         await sleep(1000);
         continue;
@@ -359,11 +421,11 @@
 
       // Chọn người tiếp theo; người đó rời pool thì chọn người khác
       if (!next || !cand.some((t) => t.id === next.id)) next = cand[0];
-      if (!nextAt) nextAt = Date.now() + rand(...FOLLOW_GAP);
+      if (!nextAt) { gapTotal = rand(...FOLLOW_GAP); nextAt = Date.now() + gapTotal; }
 
       const left = nextAt - Date.now();
       if (left > 0) {
-        status = `⏳ ${fmt(left)} nữa follow → ${next.name}`;
+        view = { kind: "count", left, total: gapTotal, who: next.name };
         renderFollow();
         await sleep(Math.min(1000, left));
         continue;
@@ -371,17 +433,23 @@
 
       // Hết đếm ngược → follow
       const target = next;
-      status = `👉 Đang follow ${target.name}...`;
+      view = { kind: "busy", who: target.name };
       renderFollow();
       const result = await runJob(target.id, "follow");
-      todo = todo.filter((t) => t.id !== target.id);
       if (result !== "timeout") await report(target.id, result);
+      todo = todo.filter((t) => t.id !== target.id);
       if (result === "follow" || result === "already") following.add(target.id);
-      if (result === "follow") GM_setValue("fl_times", [...times, Date.now()]);
-      lastDone = `${target.name}: ${LABEL[result] || result}`;
-      log(lastDone);
+      if (result === "follow") {
+        GM_setValue("fl_times", [...times, Date.now()]);
+        recent.unshift({ t: hhmm(), who: target.name });
+        recent.length = Math.min(recent.length, 3);
+      } else if (result !== "already") {
+        skipped.add(target.id); // không thấy nút / bấm không ăn / quá lâu → bỏ qua lặng lẽ
+      }
+      log(target.name, LABEL[result] || result);
       next = null;
-      nextAt = Date.now() + rand(...FOLLOW_GAP); // bắt đầu đếm ngược cho người sau
+      gapTotal = rand(...FOLLOW_GAP);
+      nextAt = Date.now() + gapTotal; // bắt đầu đếm ngược cho người sau
     }
   };
   loop();
