@@ -1,27 +1,14 @@
-// ==UserScript==
-// @name         FB Presence Pool + Follow
-// @version      5.3
-// @updateURL    https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js
-// @downloadURL  https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js
-// @match        https://*.facebook.com/*
-// @run-at       document-idle
-// @grant        GM_xmlhttpRequest
-// @grant        GM_getValue
-// @grant        GM_setValue
-// @grant        GM_openInTab
-// @grant        GM_addValueChangeListener
-// @grant        GM_removeValueChangeListener
-// @connect      unconstructive-pitiably-kiley.ngrok-free.dev
-// @connect      ngrok-free.dev
-// @connect      raw.githubusercontent.com
-// ==/UserScript==
+// FB Pool - code chính.
+// File này KHÔNG cài vào Tampermonkey. Tampermonkey chỉ cài "loader.user.js",
+// loader tự tải file này từ GitHub mỗi lần mở Facebook rồi chạy.
+// → Muốn sửa gì chỉ cần sửa file này trên GitHub, không cần số phiên bản.
+//
+// Các biến có sẵn do loader truyền vào: GM_xmlhttpRequest, GM_getValue, GM_setValue,
+// GM_deleteValue, GM_openInTab, GM_addValueChangeListener, GM_removeValueChangeListener, BUILD
 
 (async () => {
   if (window.top !== window) return;
 
-  const VERSION = "5.3"; // nhớ tăng cùng lúc với @version ở trên mỗi khi sửa code
-  // Link file trên GitHub (giống @updateURL ở trên) để báo "có bản mới"
-  const UPDATE_URL = "https://raw.githubusercontent.com/ncdathwb/fb-pool/main/followFB.user.js";
   const SERVER = "https://unconstructive-pitiably-kiley.ngrok-free.dev";
   const KEY = "doi-thanh-chuoi-bi-mat";
 
@@ -131,51 +118,13 @@
   // =====================================================================
   const { line, panel } = mkPanel();
   const title = line("font-weight:700;margin-bottom:4px");
-  title.textContent = `FB Pool v${VERSION}`;
+  title.textContent = `FB Pool (bản ${BUILD})`;
   const connLine = line();
   const errLine = line("color:#f99;font-size:11px;word-break:break-all;margin-top:2px");
   const followLine = line("color:#bbb;margin-top:2px");
   const btn = document.createElement("button");
   btn.style.cssText = "cursor:pointer;margin-top:8px;padding:4px 10px;border-radius:6px;border:0;width:100%";
   panel.append(btn);
-
-  // ===== Kiểm tra bản mới trên GitHub (mỗi lần mở Facebook, tối đa 10 phút/lần) =====
-  const newer = (a, b) => {
-    const x = a.split(".").map(Number), y = b.split(".").map(Number);
-    for (let i = 0; i < Math.max(x.length, y.length); i++) {
-      if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
-    }
-    return false;
-  };
-  const checkUpdate = () => {
-    const last = GM_getValue("upd_check", 0);
-    if (Date.now() - last < 10 * 60 * 1000 && !GM_getValue("upd_ver", "")) return;
-    GM_setValue("upd_check", Date.now());
-    GM_xmlhttpRequest({
-      method: "GET",
-      url: UPDATE_URL + "?t=" + Date.now(),   // tránh bản lưu tạm (cache)
-      timeout: 15000,
-      onload: (r) => {
-        const v = (r.responseText || "").match(/@version\s+([\d.]+)/)?.[1] || "";
-        GM_setValue("upd_ver", v && newer(v, VERSION) ? v : "");
-        showUpdate();
-      },
-    });
-  };
-  const showUpdate = () => {
-    const v = GM_getValue("upd_ver", "");
-    if (!v || !newer(v, VERSION) || panel.querySelector?.("[data-upd]")) return;
-    const u = document.createElement("button");
-    u.setAttribute?.("data-upd", "1");
-    u.textContent = `⬆️ Có bản mới v${v} - bấm để cập nhật`;
-    u.style.cssText = "cursor:pointer;margin-top:6px;padding:4px 10px;border-radius:6px;border:0;width:100%;background:#f5c518";
-    // Để Tampermonkey tự mở tab (không bị Chrome chặn popup) → hiện trang Cập nhật
-    u.onclick = () => GM_openInTab(UPDATE_URL + "?t=" + Date.now(), { active: true, insert: true });
-    panel.append(u);
-    toast(`FB Pool có bản mới v${v}`, true);
-  };
-  showUpdate();
-  checkUpdate();
 
   let connOk = null;
   const setConn = (ok, text, detail = "") => {
@@ -215,7 +164,7 @@
     findName(document.documentElement.innerHTML) ||
     [...document.querySelectorAll(`a[href*="${id}"]`)].map((a) => a.innerText.trim()).find((t) => t && t.length < 100) ||
     "?";
-  title.textContent = `FB Pool v${VERSION} - ${name}`;
+  title.textContent = `FB Pool (bản ${BUILD}) - ${name}`;
 
   // ===== Gọi server =====
   const req = (method, path, data, timeout = 15000) =>
@@ -242,7 +191,7 @@
     TAB = Math.random().toString(36).slice(2, 12);
     sessionStorage.setItem("fbpool_tab", TAB);
   }
-  const me = (extra) => ({ id, name, v: VERSION, tab: TAB, ...extra });
+  const me = (extra) => ({ id, name, v: "github", tab: TAB, ...extra });
 
   // ===== Dữ liệu từ server =====
   let todo = [];                 // [{id, name}] người online mình chưa follow
@@ -276,12 +225,7 @@
       return poll();
     }
     if (r.ok && r.status === 401) { fatal = true; return setConn(false, "Sai KEY (không khớp server.py)"); }
-    if (r.ok && r.status === 426) {
-      fatal = true;
-      GM_setValue("upd_check", 0);   // kiểm tra GitHub ngay để hiện nút cập nhật
-      checkUpdate();
-      return setConn(false, "Script cũ, hãy cập nhật bản mới", body?.detail || "");
-    }
+    if (r.ok && r.status === 426) { fatal = true; return setConn(false, "Server yêu cầu bản khác", body?.detail || ""); }
     fails++;
     if (!r.ok) {
       const why = {
